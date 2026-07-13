@@ -10570,8 +10570,9 @@ struct VerticalTabsSidebar: View {
     // Applies one stable overlay/autohide scroller config and never toggles it.
     // Toggling `hasVerticalScroller`/style from SwiftUI re-renders (constant
     // while agents update rows) re-flashes the overlay knob so it never reaches
-    // its idle fade; a stable config lets AppKit own appear/scroll/fade and the
-    // finite empty-area height keeps it hidden when content fits (#3241).
+    // its idle fade. A stable config plus user-scroll notifications owns the
+    // knob's visibility without reacting to row updates, and the finite
+    // empty-area height keeps it hidden when content fits (#3241).
     private func configureSidebarScrollView(_ scrollView: NSScrollView?) {
         guard let scrollView else { return }
         scrollView.applySidebarOverlayScrollerConfiguration()
