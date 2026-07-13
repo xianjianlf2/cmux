@@ -3290,6 +3290,14 @@ final class CLINotifyProcessIntegrationRegressionTests: XCTestCase {
             context.state.commands.contains { $0.hasPrefix("notify_target") || $0.hasPrefix("set_status codex ") },
             "Managed subagent Stop should not notify or clobber visible status, saw \(context.state.commands)"
         )
+        let stateURL = context.root.appendingPathComponent("codex-hook-sessions.json")
+        let state = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any])
+        let sessions = try XCTUnwrap(state["sessions"] as? [String: Any])
+        let child = try XCTUnwrap(sessions[sessionId] as? [String: Any])
+        XCTAssertEqual(child["runId"] as? String, "child-thread")
+        XCTAssertEqual(child["parentRunId"] as? String, "root-thread")
+        XCTAssertEqual(child["relationship"] as? String, "spawned")
+        XCTAssertEqual(child["restoreAuthority"] as? Bool, false)
     }
 
     func testCodexStopIgnoresStaleSubagentRelayFromCompletedTurnWithoutTurnId() throws {

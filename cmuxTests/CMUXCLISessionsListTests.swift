@@ -2,6 +2,88 @@ import Foundation
 import Testing
 
 extension CMUXCLIErrorOutputRegressionTests {
+    @Test func sessionsTreeReportsSpawnAndForkRelationshipsWithoutGrantingChildrenRestoreAuthority() throws {
+        let cliPath = try bundledCLIPath()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-sessions-tree-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store: [String: Any] = [
+            "version": 2,
+            "sessions": [
+                "root-session": [
+                    "sessionId": "root-session",
+                    "workspaceId": "workspace-a",
+                    "surfaceId": "surface-a",
+                    "runId": "root-run",
+                    "restoreAuthority": true,
+                    "startedAt": 100.0,
+                    "updatedAt": 130.0,
+                ],
+                "child-session": [
+                    "sessionId": "child-session",
+                    "workspaceId": "workspace-a",
+                    "surfaceId": "surface-a",
+                    "runId": "child-run",
+                    "parentRunId": "root-run",
+                    "parentSessionId": "root-session",
+                    "relationship": "spawned",
+                    "restoreAuthority": false,
+                    "startedAt": 110.0,
+                    "updatedAt": 120.0,
+                ],
+                "fork-session": [
+                    "sessionId": "fork-session",
+                    "workspaceId": "workspace-a",
+                    "surfaceId": "surface-b",
+                    "runId": "fork-run",
+                    "parentSessionId": "root-session",
+                    "relationship": "forked",
+                    "restoreAuthority": true,
+                    "startedAt": 115.0,
+                    "updatedAt": 125.0,
+                ],
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: store, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: root.appendingPathComponent("codex-hook-sessions.json"), options: .atomic)
+
+        var environment = ProcessInfo.processInfo.environment
+        for key in Array(environment.keys) where key.hasPrefix("CMUX_") {
+            environment.removeValue(forKey: key)
+        }
+        environment["CMUX_CLI_SENTRY_DISABLED"] = "1"
+        environment["CMUX_AGENT_HOOK_STATE_DIR"] = root.path
+
+        let result = runProcess(
+            executablePath: cliPath,
+            arguments: ["sessions", "tree", "--all", "--json"],
+            environment: environment,
+            timeout: 5
+        )
+
+        #expect(!result.timedOut, Comment(rawValue: result.stderr))
+        #expect(result.status == 0, Comment(rawValue: result.stderr))
+        let output = try #require(JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any])
+        #expect(output["schema_version"] as? Int == 1)
+        let nodes = try #require(output["nodes"] as? [[String: Any]])
+        let edges = try #require(output["edges"] as? [[String: Any]])
+        #expect(nodes.count == 3)
+        #expect(nodes.first { $0["run_id"] as? String == "root-run" }?["restore_authority"] as? Bool == true)
+        #expect(nodes.first { $0["run_id"] as? String == "child-run" }?["restore_authority"] as? Bool == false)
+        #expect(edges.contains {
+            $0["from_run_id"] as? String == "root-run"
+                && $0["to_run_id"] as? String == "child-run"
+                && $0["relationship"] as? String == "spawned"
+        })
+        #expect(edges.contains {
+            $0["from_session_id"] as? String == "root-session"
+                && $0["to_run_id"] as? String == "fork-run"
+                && $0["relationship"] as? String == "forked"
+        })
+    }
+
     @Test func testSessionsListDefaultOmitsStaleCodexRowsWithoutTranscript() throws {
         let cliPath = try bundledCLIPath()
         let root = FileManager.default.temporaryDirectory
