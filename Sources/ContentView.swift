@@ -10567,14 +10567,12 @@ struct VerticalTabsSidebar: View {
         withTransaction(transaction) { workspaceScrollContentMinHeight = contentMinHeight }
     }
 
-    // Applies one stable overlay/autohide scroller config and never toggles it.
-    // Toggling `hasVerticalScroller`/style from SwiftUI re-renders (constant
-    // while agents update rows) re-flashes the overlay knob so it never reaches
-    // its idle fade; a stable config lets AppKit own appear/scroll/fade and the
-    // finite empty-area height keeps it hidden when content fits (#3241).
+    // AppKit's native overlay visibility follows system preferences and input
+    // devices. The sidebar disables that native scroller and uses one
+    // cmux-owned indicator driven only by user-scroll notifications (#3241).
     private func configureSidebarScrollView(_ scrollView: NSScrollView?) {
         guard let scrollView else { return }
-        scrollView.applySidebarOverlayScrollerConfiguration()
+        scrollView.applySidebarScrollIndicatorConfiguration()
     }
 
     private func extensionSidebarScrollArea(renderContext: WorkspaceListRenderContext) -> some View {
