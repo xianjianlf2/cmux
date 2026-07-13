@@ -3,7 +3,9 @@ public import AppKit
 extension NSScrollView {
     /// Forces the sidebar workspace list's stable overlay-scroller
     /// configuration, writing each property only when it differs to avoid
-    /// cancelling an in-flight scroller fade.
+    /// cancelling an in-flight scroller fade. It also attaches the sidebar's
+    /// user-scroll visibility controller so the knob hides at rest even when
+    /// the preferred scroller style is legacy because a mouse is connected.
     ///
     /// `SidebarScrollViewResolver` re-resolves on every SwiftUI update of the
     /// sidebar, so this is called repeatedly for the same scroll view —
@@ -30,5 +32,6 @@ extension NSScrollView {
         if !hasVerticalScroller {
             hasVerticalScroller = true
         }
+        SidebarScrollerVisibilityControllers.attach(to: self)
     }
 }
