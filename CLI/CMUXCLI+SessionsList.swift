@@ -13,7 +13,16 @@ extension CMUXCLI {
     ) throws {
         var args = rawArgs
         let subcommand = args.first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if subcommand == "debug" || subcommand == "list" {
+        if subcommand == "tree" {
+            args.removeFirst()
+            try runSessionsTreeCommand(
+                commandArgs: args,
+                jsonOutput: jsonOutput,
+                processEnv: processEnv,
+                fileManager: fileManager
+            )
+            return
+        } else if subcommand == "debug" || subcommand == "list" {
             args.removeFirst()
         } else if subcommand == "help" {
             print(sessionsUsage())
@@ -299,12 +308,16 @@ extension CMUXCLI {
     func sessionsUsage() -> String {
         String(localized: "cli.sessions.usage", defaultValue: """
         Usage: cmux sessions list [options]
+               cmux sessions tree [options]
                cmux sessions [options]
 
         Print saved agent session records from ~/.cmuxterm/*-hook-sessions.json.
         This command does not require a running cmux socket.
         By default, broad output shows active, restorable, or transcript-backed records.
         Pass --all to inspect every saved hook record.
+
+        `sessions tree` renders process-spawn and conversation-fork relationships.
+        Add --json for a flat, versioned nodes-and-edges graph.
 
         Options:
           --agent <name>        Filter to one agent, for example codex or claude

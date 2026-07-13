@@ -338,7 +338,8 @@ enum AgentResumeCommandBuilder {
             launchCommand: launchCommand,
             workingDirectory: workingDirectory,
             customRegistration: customRegistration,
-            includeWorkingDirectoryPrefix: includeWorkingDirectoryPrefix
+            includeWorkingDirectoryPrefix: includeWorkingDirectoryPrefix,
+            additionalEnvironment: [:]
         )
     }
 
@@ -369,7 +370,11 @@ enum AgentResumeCommandBuilder {
             launchCommand: launchCommand,
             workingDirectory: workingDirectory,
             customRegistration: customRegistration,
-            includeWorkingDirectoryPrefix: includeWorkingDirectoryPrefix
+            includeWorkingDirectoryPrefix: includeWorkingDirectoryPrefix,
+            additionalEnvironment: [
+                "CMUX_AGENT_PARENT_SESSION_ID": sessionId,
+                "CMUX_AGENT_RELATIONSHIP": "forked",
+            ]
         )
     }
 
@@ -379,10 +384,14 @@ enum AgentResumeCommandBuilder {
         launchCommand: AgentLaunchCommandSnapshot?,
         workingDirectory: String?,
         customRegistration: CmuxVaultAgentRegistration?,
-        includeWorkingDirectoryPrefix: Bool
+        includeWorkingDirectoryPrefix: Bool,
+        additionalEnvironment: [String: String]
     ) -> String {
         var commandParts: [String] = []
-        let environmentParts = launchEnvironmentParts(kind: kind, environment: launchCommand?.environment)
+        var environmentParts = launchEnvironmentParts(kind: kind, environment: launchCommand?.environment)
+        environmentParts.append(contentsOf: additionalEnvironment.keys.sorted().compactMap { key in
+            additionalEnvironment[key].map { "\(key)=\($0)" }
+        })
         if !environmentParts.isEmpty {
             commandParts.append("env")
             commandParts.append(contentsOf: environmentParts)

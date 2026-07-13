@@ -169,6 +169,15 @@ struct ClaudeHookSessionRecord: Codable {
     /// does not carry `background_tasks`, so the idle-reminder gate reads this.
     /// Optional so stores written before this field decode unchanged.
     var hadPendingBackgroundWorkAtStop: Bool?
+    /// Process generations observed for this logical session. Optional for
+    /// compatibility with stores written before session graphs existed.
+    var runs: [AgentSessionRunRecord]? = nil
+    var activeRunId: String? = nil
+    var runId: String? = nil
+    var parentRunId: String? = nil
+    var restoreAuthority: Bool? = nil
+    var parentSessionId: String? = nil
+    var relationship: AgentSessionRelationship? = nil
 }
 
 struct ClaudeHookActiveSessionRecord: Codable {
@@ -199,7 +208,7 @@ private struct CodexMonitorLeaseRecord: Codable {
 }
 
 struct ClaudeHookSessionStoreFile: Codable {
-    var version: Int = 1
+    var version: Int = 2
     var sessions: [String: ClaudeHookSessionRecord] = [:]
     var activeSessionsByWorkspace: [String: ClaudeHookActiveSessionRecord] = [:]
     // The pane-scoped active boundary. The workspace slot only remembers ONE
@@ -220,7 +229,7 @@ struct ClaudeHookSessionStoreFile: Codable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        version = max(try container.decodeIfPresent(Int.self, forKey: .version) ?? 1, 2)
         sessions = try container.decodeIfPresent([String: ClaudeHookSessionRecord].self, forKey: .sessions) ?? [:]
         activeSessionsByWorkspace = try container.decodeIfPresent(
             [String: ClaudeHookActiveSessionRecord].self,
@@ -242,12 +251,17 @@ final class ClaudeHookSessionStore {
 
     private let statePath: String
     private let fileManager: FileManager
+    private let processEnv: [String: String]
+    private let agentName: String
+    private let lineageResolver: AgentHookSessionLineageResolver
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
     init(
         processEnv: [String: String] = ProcessInfo.processInfo.environment,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        agentName: String = "claude",
+        lineageResolver: AgentHookSessionLineageResolver = AgentHookSessionLineageResolver()
     ) {
         if let overridePath = processEnv["CMUX_CLAUDE_HOOK_STATE_PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !overridePath.isEmpty {
@@ -261,6 +275,9 @@ final class ClaudeHookSessionStore {
             self.statePath = NSString(string: Self.defaultStatePath).expandingTildeInPath
         }
         self.fileManager = fileManager
+        self.processEnv = processEnv
+        self.agentName = agentName
+        self.lineageResolver = lineageResolver
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
 
@@ -1139,7 +1156,51 @@ final class ClaudeHookSessionStore {
         if let hadPendingBackgroundWorkAtStop {
             record.hadPendingBackgroundWorkAtStop = hadPendingBackgroundWorkAtStop
         }
+        recordSessionRun(&record, pid: pid ?? record.pid, now: now)
         record.updatedAt = now
+    }
+
+    private func recordSessionRun(
+        _ record: inout ClaudeHookSessionRecord,
+        pid: Int?,
+        now: TimeInterval
+    ) {
+        let lineage = lineageResolver.resolve(
+            agentName: agentName,
+            sessionId: record.sessionId,
+            pid: pid,
+            environment: processEnv,
+            now: now
+        )
+        var runs = record.runs ?? []
+        if let index = runs.firstIndex(where: { $0.runId == lineage.runId }) {
+            runs[index].pid = lineage.pid ?? runs[index].pid
+            runs[index].processStartedAt = lineage.processStartedAt ?? runs[index].processStartedAt
+            runs[index].parentRunId = lineage.parentRunId ?? runs[index].parentRunId
+            runs[index].parentSessionId = lineage.parentSessionId ?? runs[index].parentSessionId
+            runs[index].relationship = lineage.relationship ?? runs[index].relationship
+            runs[index].restoreAuthority = runs[index].restoreAuthority || lineage.restoreAuthority
+            runs[index].updatedAt = now
+        } else {
+            runs.append(AgentSessionRunRecord(
+                runId: lineage.runId,
+                pid: lineage.pid,
+                processStartedAt: lineage.processStartedAt,
+                parentRunId: lineage.parentRunId,
+                parentSessionId: lineage.parentSessionId,
+                relationship: lineage.relationship,
+                restoreAuthority: lineage.restoreAuthority,
+                startedAt: now,
+                updatedAt: now
+            ))
+        }
+        record.runs = runs
+        record.activeRunId = lineage.runId
+        record.runId = lineage.runId
+        record.parentRunId = lineage.parentRunId
+        record.restoreAuthority = record.restoreAuthority == true || lineage.restoreAuthority
+        record.parentSessionId = lineage.parentSessionId ?? record.parentSessionId
+        record.relationship = lineage.relationship ?? record.relationship
     }
 
     func clearNotificationEmission(sessionId: String) throws {
@@ -27366,10 +27427,6 @@ struct CMUXCLI {
             return true
         }
 
-        guard subagentNotificationSuppressionEnabled(env: env) else {
-            return false
-        }
-
         if nestedPromptEvent {
             return true
         }
@@ -27704,7 +27761,6 @@ struct CMUXCLI {
         launchCommand: AgentHookLaunchCommandRecord?
     ) {
         if !agentHookSessionHasDurableResumeEvidence(kind: kind, launchCommand: launchCommand) {
-            clearAgentSurfaceResumeBinding(client: client, workspaceId: workspaceId, surfaceId: surfaceId, sessionId: sessionId)
             return
         }
         let resumeEnvironment = agentSurfaceResumeEnvironment(kind: kind, environment: launchCommand?.environment)
@@ -27721,12 +27777,6 @@ struct CMUXCLI {
             workingDirectory: resumeWorkingDirectory,
             environment: resumeEnvironment
         ) else {
-            clearAgentSurfaceResumeBinding(
-                client: client,
-                workspaceId: workspaceId,
-                surfaceId: surfaceId,
-                sessionId: sessionId
-            )
             return
         }
         var params: [String: Any] = [
@@ -30236,7 +30286,8 @@ export default CMUXSessionRestore;
             processEnv: env.merging(
                 ["CMUX_CLAUDE_HOOK_STATE_PATH": agentHookStatePath(sessionStoreSuffix: def.sessionStoreSuffix, env: env)],
                 uniquingKeysWith: { _, new in new }
-            )
+            ),
+            agentName: def.name
         )
 
         let hookCwd = input.cwd
